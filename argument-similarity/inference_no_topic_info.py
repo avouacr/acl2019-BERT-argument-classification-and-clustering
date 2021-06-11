@@ -1,6 +1,7 @@
 """Recompute BERT predictions on UKP dev/test without topic information."""
 import os
 import csv
+import itertools
 
 from tqdm import tqdm
 from pytorch_pretrained_bert.tokenization import BertTokenizer
@@ -15,6 +16,7 @@ def inference(bert_output, test_file, eval_batch_size=32):
     # Import fine-tuned BERT model
     max_seq_length = 64
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+    print(f"Device : {device}" + "\n\n")
     tokenizer = BertTokenizer.from_pretrained(bert_output, do_lower_case=True)
     model = SigmoidBERT.from_pretrained(bert_output)
     model.to(device)
@@ -29,16 +31,15 @@ def inference(bert_output, test_file, eval_batch_size=32):
             __, sentence_a, sentence_b, __ = splits
             test_sentences.add(sentence_a)
             test_sentences.add(sentence_b)
-    test_sentences = list(test_sentences)
+    comb_iter = itertools.combinations(test_sentences, 2)
 
     input_examples = []
     output_examples = []
-    for i in range(0, len(test_sentences)-1):
-        for j in range(i+1, len(test_sentences)):
-            input_examples.append(InputExample(text_a=test_sentences[i],
-                                               text_b=test_sentences[j],
-                                               label=-1))
-            output_examples.append([test_sentences[i], test_sentences[j], -1])
+    for sentence_a, sentence_b in comb_iter:
+        input_examples.append(InputExample(text_a=sentence_a,
+                                           text_b=sentence_b,
+                                           label=-1))
+        output_examples.append([sentence_a, sentence_b, -1])
 
     eval_features = convert_examples_to_features(input_examples, max_seq_length, tokenizer)
 
