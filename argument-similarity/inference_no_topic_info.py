@@ -2,6 +2,7 @@
 import os
 import csv
 
+from tqdm import tqdm
 from pytorch_pretrained_bert.tokenization import BertTokenizer
 import torch
 from torch.utils.data import TensorDataset, DataLoader, SequentialSampler
@@ -52,7 +53,7 @@ def inference(bert_output, test_file, eval_batch_size=32):
     # Inference
     predicted_logits = []
     with torch.no_grad():
-        for input_ids, input_mask, segment_ids in eval_dataloader:
+        for input_ids, input_mask, segment_ids in tqdm(eval_dataloader, desc="Batch"):
             input_ids = input_ids.to(device)
             input_mask = input_mask.to(device)
             segment_ids = segment_ids.to(device)
