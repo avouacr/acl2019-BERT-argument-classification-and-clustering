@@ -13,8 +13,10 @@ def inference(bert_output, test_file, eval_batch_size=32):
     """Perform inference."""
     # Import fine-tuned BERT model
     max_seq_length = 64
+    device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
     tokenizer = BertTokenizer.from_pretrained(bert_output, do_lower_case=True)
     model = SigmoidBERT.from_pretrained(bert_output)
+    model.to(device)
     model.eval()
 
     # Import test data
@@ -51,7 +53,12 @@ def inference(bert_output, test_file, eval_batch_size=32):
     predicted_logits = []
     with torch.no_grad():
         for input_ids, input_mask, segment_ids in eval_dataloader:
-            logits = model(input_ids, segment_ids, input_mask).numpy()
+            input_ids = input_ids.to(device)
+            input_mask = input_mask.to(device)
+            segment_ids = segment_ids.to(device)
+
+            logits = model(input_ids, segment_ids, input_mask)
+            logits = logits.detach().cpu().numpy()
             predicted_logits.extend(logits[:, 0])
 
     for idx, logit in enumerate(predicted_logits):

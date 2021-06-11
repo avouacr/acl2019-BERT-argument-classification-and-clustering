@@ -88,4 +88,3 @@ for idx in range(len(output_examples)):
     print("Sentence B:", example[1])
     print("Similarity:", example[2])
     print("")
-
