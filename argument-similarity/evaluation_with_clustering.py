@@ -1,18 +1,20 @@
 """
-Evaluates the performance on the UKP ASPECT Corpus with hierachical clustering (Table 2 in our paper).
+Evaluate the performance on the UKP ASPECT Corpus with hierachical clustering.
 
 Greedy hierachical clustering.
 Merges two clusters if the pairwise mean cluster similarity is larger than a threshold.
 Merges clusters with highest similarity first
 Uses dev set to determine the threshold for supervised systems
 """
+import csv
+import os
+from collections import defaultdict
+
 import numpy as np
 import scipy
 import scipy.spatial.distance
-import csv
-import os
 from sklearn.metrics import f1_score
-from collections import defaultdict
+
 
 class VectorSimilarityScorer:
     def __init__(self, sentence_vectors):
@@ -46,9 +48,9 @@ class PairwisePredictionSimilarityScorer:
             self.score_lookup[sentence_a][sentence_b] = score
             self.score_lookup[sentence_b][sentence_a] = score
 
-
     def get_similarity(self, sentence_a, sentence_b):
         return self.score_lookup[sentence_a][sentence_b]
+
 
 class PriorityQueue(object):
     def __init__(self):
@@ -128,8 +130,6 @@ class HierachicalClustering:
 
         return test_data, cluster_info
 
-
-
     def compute_cluster_sim(self, cluster_a, cluster_b):
         scores = []
         for sentence_a in cluster_a:
@@ -140,17 +140,13 @@ class HierachicalClustering:
 
     def cluster_topics(self, threshold):
         for topic in self.clusters:
-            #print("\nRun clustering for:", topic)
             topic_cluster = self.clusters[topic]
             self.run_clustering(topic_cluster, threshold)
         return self.clusters
 
-
-
     def run_clustering(self, clusters, threshold):
         queue = PriorityQueue()
 
-        #Initial cluster sim computation
         cluster_ids = list(clusters.keys())
         for i in range(0, len(cluster_ids)-1):
             for j in range(i+1, len(cluster_ids)):
@@ -166,15 +162,11 @@ class HierachicalClustering:
             if element['cluster_sim'] <= threshold:
                 break
 
-            #print("Merge", element, "size_a:", len(clusters[element['cluster_a']]), "size_b:", len(clusters[element['cluster_b']]))
-            #Merge cluster with highest sim
             self.merge_clusters(clusters, element['cluster_a'], element['cluster_b'])
 
-            #Remove all element involving cluster_a or cluster_b
             queue.remove_clusters(element['cluster_a'])
             queue.remove_clusters(element['cluster_b'])
 
-            #Recompute cluster sim for all clusters with cluster_a and cluster_b
             cluster_a = element['cluster_a']
             for cluster_b in clusters.keys():
                 if cluster_a != cluster_b:
@@ -187,16 +179,11 @@ class HierachicalClustering:
         del clusters[key_b]
 
 
-######################################
-#
-# Some help functions
-#
-######################################
-
 def get_clustering(similarity_function, testfile, threshold):
     cluster_alg = HierachicalClustering(similarity_function, testfile)
     clusters = cluster_alg.cluster_topics(threshold)
     return clusters
+
 
 def write_output_file(clusters, output_file):
     os.makedirs(os.path.dirname(output_file), exist_ok=True)
@@ -210,7 +197,7 @@ def write_output_file(clusters, output_file):
                 fOut.write("\n")
 
 
-def evaluate(clusters, labels_file, print_scores=False):
+def eval_split(clusters, labels_file, print_scores=False):
     all_f1_means = []
     all_f1_sim = []
     all_f1_dissim = []
@@ -222,10 +209,9 @@ def evaluate(clusters, labels_file, print_scores=False):
             splits = map(str.strip, splits)
             label_topic, sentence_a, sentence_b, label = splits
             label_bin = '1' if label in ['SS', 'HS'] else '0'
-
-
             test_data[label_topic].append(
-                    {'topic': label_topic, 'sentence_a': sentence_a, 'sentence_b': sentence_b, 'label': label,
+                    {'topic': label_topic, 'sentence_a': sentence_a,
+                     'sentence_b': sentence_b, 'label': label,
                      'label_bin': label_bin})
 
     for topic in clusters:
@@ -237,7 +223,6 @@ def evaluate(clusters, labels_file, print_scores=False):
 
         topic_test_data = test_data[topic]
 
-
         y_true = np.zeros(len(topic_test_data))
         y_pred = np.zeros(len(topic_test_data))
 
@@ -246,7 +231,7 @@ def evaluate(clusters, labels_file, print_scores=False):
             sentence_b = test_annotation['sentence_b']
             label = test_annotation['label_bin']
 
-            if label=='1':
+            if label == '1':
                 y_true[idx] = 1
 
             if sentences_cluster_id[sentence_a] == sentences_cluster_id[sentence_b]:
@@ -263,77 +248,65 @@ def evaluate(clusters, labels_file, print_scores=False):
             print("F-Sim: %.2f%%" % (f_sim * 100))
             print("F-Dissim: %.2f%%" % (f_dissim * 100))
             print("F-Mean: %.2f%%" % (f_mean * 100))
-            acc = np.sum(y_true==y_pred) / len(y_true)
+            acc = np.sum(y_true == y_pred) / len(y_true)
             print("Acc: %.2f%%" % (acc * 100))
 
     return np.mean(all_f1_sim), np.mean(all_f1_dissim), np.mean(all_f1_means)
 
 
+def best_clustering_split(split, test_path_tplt, bert_experiment_tplt):
+    dev_file = test_path_tplt.format(split=split, mode="dev")
+    test_file = test_path_tplt.format(split=split, mode="test")
+    dev_sim_scorer = PairwisePredictionSimilarityScorer(bert_experiment_tplt.format(split=split,
+                                                                                    mode="dev"))
+    test_sim_scorer = PairwisePredictionSimilarityScorer(bert_experiment_tplt.format(split=split,
+                                                                                     mode="test"))
+
+    best_f1 = 0
+    best_threshold = 0
+
+    for threshold_int in range(0, 20):
+        threshold = threshold_int / 20
+        clusters = get_clustering(dev_sim_scorer.get_similarity, dev_file, threshold)
+        __, __, f1_mean = eval_split(clusters, dev_file)
+
+        if f1_mean > best_f1:
+            best_f1 = f1_mean
+            best_threshold = threshold
+
+    # print("Best threshold on dev:", best_threshold)
+
+    # Compute clusters on test
+    clusters = get_clustering(test_sim_scorer.get_similarity, test_file, best_threshold)
+    return clusters
 
 
-
-######################################
-#
-# Functions for pairwise classification approaches
-#
-######################################
-def trained_pairwise_prediction_clustering(bert_experiment, epoch):
-
-    print("Epoch:", epoch)
+def final_eval(project_path):
+    test_path_tplt = os.path.join(project_path, "datasets", "ukp_aspect", "splits",
+                                  "{split}", "{mode}.tsv")
+    bert_experiment_tplt = os.path.join(project_path, "bert_output", "ukp",
+                                        "seed-1", "splits", "{split}",
+                                        "{mode}_predictions_epoch_3.tsv")
 
     all_f1_sim = []
     all_f1_dissim = []
     all_f1 = []
     for split in [0, 1, 2, 3]:
-        print("\n==================")
-        print("Split:", split)
-        dev_file = './datasets/ukp_aspect/splits/%d/dev.tsv' % (split)
-        test_file = './datasets/ukp_aspect/splits/%d/test.tsv' % (split)
-        output_file = None #'output/bert-base-uncased/%s/seed-%d/%d/test_clusters.tsv' % (transitive, seed, split)
-
-        dev_sim_scorer = PairwisePredictionSimilarityScorer("%s/%d/dev_predictions_epoch_%d.tsv" % (bert_experiment, split, epoch))
-        test_sim_scorer = PairwisePredictionSimilarityScorer("%s/%d/test_predictions_epoch_%d.tsv" % (bert_experiment, split, epoch))
-
-        best_f1 = 0
-        best_threshold = 0
-
-        for threshold_int in range(0, 20):
-            threshold = threshold_int / 20
-            clusters = get_clustering(dev_sim_scorer.get_similarity, dev_file, threshold)
-            f1_sim, f1_dissim, f1 = evaluate(clusters, dev_file)
-
-            if f1 > best_f1:
-                best_f1 = f1
-                best_threshold = threshold
-
-        print("Best threshold on dev:", best_threshold)
-
-        # Evaluate on test
-        clusters = get_clustering(test_sim_scorer.get_similarity, test_file, best_threshold)
-        if output_file != None:
-            write_output_file(clusters, output_file)
-        f1_sim, f1_dissim, f1 = evaluate(clusters, test_file)
+        # print("\n==================")
+        # print("Split:", split)
+        test_file = test_path_tplt.format(split=split, mode="test")
+        clusters = best_clustering_split(split, test_path_tplt, bert_experiment_tplt)
+        f1_sim, f1_dissim, f1_mean = eval_split(clusters, test_file)
 
         all_f1_sim.append(f1_sim)
         all_f1_dissim.append(f1_dissim)
-        all_f1.append(f1)
+        all_f1.append(f1_mean)
 
-        print("Test-Performance on this split:")
-        print("F-Mean: %.4f" % (f1))
-        print("F-sim: %.4f" % (f1_sim))
-        print("F-dissim: %.4f" % (f1_dissim))
+        # print("Test-Performance on this split:")
+        # print("F-Mean: %.4f" % (f1_mean))
+        # print("F-sim: %.4f" % (f1_sim))
+        # print("F-dissim: %.4f" % (f1_dissim))
 
-    print("\n\n===========  Averaged performance over all splits ==========")
     print("F-Mean: %.4f" % (np.mean(all_f1)))
     print("F-sim: %.4f" % (np.mean(all_f1_sim)))
     print("F-dissim: %.4f" % (np.mean(all_f1_dissim)))
-    return np.mean(all_f1)
-
-
-def main():
-    bert_experiment = 'bert_output/ukp/seed-1/splits'
-    trained_pairwise_prediction_clustering(bert_experiment, epoch=3)
-
-
-if __name__ == '__main__':
-    main()

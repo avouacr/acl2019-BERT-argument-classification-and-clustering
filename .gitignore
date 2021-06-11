@@ -1,3 +1,5 @@
 *.tsv
 *.bin
 .idea
+**/bert_output
+**/__pycache__
