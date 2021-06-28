@@ -16,7 +16,6 @@ def inference(bert_output, test_file, eval_batch_size=32):
     # Import fine-tuned BERT model
     max_seq_length = 64
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
-    print(f"Device : {device}" + "\n\n")
     tokenizer = BertTokenizer.from_pretrained(bert_output, do_lower_case=True)
     model = SigmoidBERT.from_pretrained(bert_output)
     model.to(device)
