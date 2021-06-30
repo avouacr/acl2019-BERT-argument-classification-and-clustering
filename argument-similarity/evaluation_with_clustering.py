@@ -11,11 +11,12 @@ import os
 from collections import defaultdict
 
 import numpy as np
+from sklearn.metrics.pairwise import cosine_similarity
 from sklearn.metrics import f1_score
 from sklearn.cluster import AgglomerativeClustering
 
 
-class PairwisePredictionSimilarityScorer:
+class SupervisedSimilarityScorer:
     def __init__(self, predictions_file):
         self.score_lookup = defaultdict(dict)
         for line in open(predictions_file):
@@ -26,11 +27,31 @@ class PairwisePredictionSimilarityScorer:
             self.score_lookup[sentence_a][sentence_b] = score
             self.score_lookup[sentence_b][sentence_a] = score
 
-    def get_similarity(self, sentence_a, sentence_b):
-        return self.score_lookup[sentence_a][sentence_b]
+    def get_distance_matrix(self, documents):
+        dist_mat = np.zeros((len(documents), len(documents)))
+        for idx_a, sentence_a in enumerate(documents):
+            for idx_b, sentence_b in enumerate(documents):
+                if sentence_a == sentence_b:
+                    dist_mat[idx_a, idx_b] = 0
+                else:
+                    dist_mat[idx_a, idx_b] = 1 - self.score_lookup[sentence_a][sentence_b]
+        return dist_mat
 
 
-def get_clustering_topic_info(similarity_function, testfile, threshold):
+class UnsupervisedSimilarityScorer:
+    def __init__(self, t2f_model):
+        self.t2f_model = t2f_model
+        self.doc2idx = {doc: idx for idx, doc in enumerate(t2f_model.documents)}
+
+    def get_distance_matrix(self, documents):
+        doc_idxs = [self.doc2idx[doc] for doc in documents]
+        dist_mat = 1 - cosine_similarity(self.t2f_model.document_vectors[doc_idxs])
+        return dist_mat
+
+
+def get_clustering(distance_function, pre_cluster_gold_topics,
+                   testfile, threshold):
+    """"""
     unique_sentences = {}
     with open(testfile, 'r') as csvfile:
         csvreader = csv.reader(csvfile, delimiter='\t', quotechar=None)
@@ -38,8 +59,11 @@ def get_clustering_topic_info(similarity_function, testfile, threshold):
             splits = map(str.strip, splits)
             topic, sentence_a, sentence_b, __ = splits
 
+            if not pre_cluster_gold_topics:
+                topic = 0   # All docs in a single topic
             if topic not in unique_sentences:
                 unique_sentences[topic] = set()
+
             unique_sentences[topic].add(sentence_a)
             unique_sentences[topic].add(sentence_b)
 
@@ -54,51 +78,13 @@ def get_clustering_topic_info(similarity_function, testfile, threshold):
             clusters[topic][0] = [topic_sentences[0]]
             continue
 
-        dist_mat = np.zeros((len(topic_sentences), len(topic_sentences)))
-        for idx_a, sentence_a in enumerate(topic_sentences):
-            for idx_b, sentence_b in enumerate(topic_sentences):
-                if sentence_a == sentence_b:
-                    dist_mat[idx_a, idx_b] = 0
-                else:
-                    dist_mat[idx_a, idx_b] = 1 - similarity_function(sentence_a,
-                                                                     sentence_b)
+        dist_mat = distance_function(topic_sentences)
 
         clustering = agg_cls.fit(dist_mat)
         for cluster in clustering.labels_:
             c_doc_idxs = np.where(clustering.labels_ == cluster)[0]
             clusters[topic][cluster] = [doc for idx, doc in enumerate(topic_sentences)
                                         if idx in c_doc_idxs]
-
-    return clusters
-
-
-def get_clustering_no_topic_info(similarity_function, testfile, threshold):
-    unique_sentences = set()
-    with open(testfile, 'r') as csvfile:
-        csvreader = csv.reader(csvfile, delimiter='\t', quotechar=None)
-        for splits in csvreader:
-            splits = map(str.strip, splits)
-            __, sentence_a, sentence_b, __ = splits
-            unique_sentences.add(sentence_a)
-            unique_sentences.add(sentence_b)
-
-    agg_cls = AgglomerativeClustering(n_clusters=None, affinity='precomputed',
-                                      linkage="average", distance_threshold=threshold)
-
-    clusters = {0: {}}  # All docs in the same topic
-    dist_mat = np.zeros((len(unique_sentences), len(unique_sentences)))
-    for idx_a, sentence_a in enumerate(unique_sentences):
-        for idx_b, sentence_b in enumerate(unique_sentences):
-            if sentence_a == sentence_b:
-                dist_mat[idx_a, idx_b] = 0
-            else:
-                dist_mat[idx_a, idx_b] = 1 - similarity_function(sentence_a, sentence_b)
-
-    clustering = agg_cls.fit(dist_mat)
-    for cluster in clustering.labels_:
-        c_doc_idxs = np.where(clustering.labels_ == cluster)[0]
-        clusters[0][cluster] = [doc for idx, doc in enumerate(unique_sentences)
-                                if idx in c_doc_idxs]
 
     return clusters
 
@@ -153,35 +139,38 @@ def eval_split(clusters, labels_file):
     return np.mean(all_f1_sim), np.mean(all_f1_dissim), np.mean(all_f1_means)
 
 
-def best_clustering_split(split, test_path_tplt, use_topic_information,
-                          project_path):
+def best_clustering_split(split, method, t2f_model, pre_cluster_gold_topics,
+                          test_path_tplt, project_path):
     # Evaluation files
     dev_file = test_path_tplt.format(split=split, mode="dev")
     test_file = test_path_tplt.format(split=split, mode="test")
 
-    if use_topic_information:
-        # HCL is performed among each (gold) topic label
-        get_clustering = get_clustering_topic_info
-        bert_experiment_tplt = os.path.join(project_path, "bert_output", "ukp",
-                                            "seed-1", "splits", "{split}",
-                                            "{mode}_predictions_epoch_3.tsv")
-    else:
-        # HCL is performed on the whole data split without topic information
-        get_clustering = get_clustering_no_topic_info
-        bert_experiment_tplt = os.path.join(project_path, "bert_output", "ukp",
-                                            "seed-1", "splits", "{split}",
-                                            "{mode}_predictions_epoch_3_no_topic_info.tsv")
-    dev_sim_scorer = PairwisePredictionSimilarityScorer(bert_experiment_tplt.format(split=split,
-                                                                                    mode="dev"))
-    test_sim_scorer = PairwisePredictionSimilarityScorer(bert_experiment_tplt.format(split=split,
-                                                                                     mode="test"))
+    if method == "supervised":
+        if pre_cluster_gold_topics:
+            # HCL is performed among each (gold) topic label
+            bert_experiment_tplt = os.path.join(project_path, "bert_output", "ukp",
+                                                "seed-1", "splits", "{split}",
+                                                "{mode}_predictions_epoch_3.tsv")
+        else:
+            # HCL is performed on the whole data split without topic information
+            bert_experiment_tplt = os.path.join(project_path, "bert_output", "ukp",
+                                                "seed-1", "splits", "{split}",
+                                                "{mode}_predictions_epoch_3_no_topic_info.tsv")
+        dev_sim_scorer = SupervisedSimilarityScorer(bert_experiment_tplt.format(split=split,
+                                                                                mode="dev"))
+        test_sim_scorer = SupervisedSimilarityScorer(bert_experiment_tplt.format(split=split,
+                                                                                 mode="test"))
+    elif method == "unsupervised":
+        dev_sim_scorer = UnsupervisedSimilarityScorer(t2f_model)
+        test_sim_scorer = dev_sim_scorer
 
     best_f1 = 0
     best_threshold = 0
 
     for threshold_int in range(0, 21):
         threshold = threshold_int / 20
-        clusters = get_clustering(dev_sim_scorer.get_similarity,
+        clusters = get_clustering(dev_sim_scorer.get_distance_matrix,
+                                  pre_cluster_gold_topics,
                                   dev_file, threshold)
         __, __, f1_mean = eval_split(clusters, dev_file)
 
@@ -192,11 +181,14 @@ def best_clustering_split(split, test_path_tplt, use_topic_information,
     # print("Best threshold on dev:", best_threshold)
 
     # Compute clusters on test
-    clusters = get_clustering(test_sim_scorer.get_similarity, test_file, best_threshold)
+    clusters = get_clustering(test_sim_scorer.get_distance_matrix,
+                              pre_cluster_gold_topics,
+                              test_file, best_threshold)
     return clusters
 
 
-def final_eval(use_topic_information, project_path):
+def final_eval(method, project_path, t2f_model=None,
+               pre_cluster_gold_topics=True):
     test_path_tplt = os.path.join(project_path, "datasets", "ukp_aspect", "splits",
                                   "{split}", "{mode}.tsv")
 
@@ -207,8 +199,9 @@ def final_eval(use_topic_information, project_path):
         # print("\n==================")
         # print("Split:", split)
         test_file = test_path_tplt.format(split=split, mode="test")
-        clusters = best_clustering_split(split, test_path_tplt, use_topic_information,
-                                         project_path)
+        clusters = best_clustering_split(split, method, t2f_model,
+                                         pre_cluster_gold_topics,
+                                         test_path_tplt, project_path)
         f1_sim, f1_dissim, f1_mean = eval_split(clusters, test_file)
 
         all_f1_sim.append(f1_sim)

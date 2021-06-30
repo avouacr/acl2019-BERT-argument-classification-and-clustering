@@ -162,40 +162,40 @@ def eval_t2f_hcl(t2f_model, eval_method, project_path):
     print("F-dissim: %.4f" % (np.mean(all_f1_dissim)))
 
 
-def eval_t2f_full(t2f_model, project_path):
-    test_file = os.path.join(project_path, "datasets", "ukp_aspect", "splits",
-                             "all_data.tsv")
-    test_data = []
-    with open(test_file, 'r') as csvfile:
-        csvreader = csv.reader(csvfile, delimiter='\t', quotechar=None)
-        for splits in csvreader:
-            splits = map(str.strip, splits)
-            __, sentence_a, sentence_b, label = splits
-            label_bin = 1 if label in ['SS', 'HS'] else 0
-            test_data.append((sentence_a, sentence_b, label_bin))
-
-    y_true = np.zeros(len(test_data))
-    y_pred = np.zeros(len(test_data))
-
-    for idx, row in enumerate(test_data):
-        sentence_a, sentence_b, label_bin = row
-        if label_bin == 1:
-            y_true[idx] = 1
-
-        idx_a = np.where(t2f_model.documents == sentence_a)[0][0]
-        idx_b = np.where(t2f_model.documents == sentence_b)[0][0]
-
-        topic_a = t2f_model.doc_topic_facet[idx_a]["topic"]
-        topic_b = t2f_model.doc_topic_facet[idx_b]["topic"]
-        facet_a = t2f_model.doc_topic_facet[idx_a]["facet"]
-        facet_b = t2f_model.doc_topic_facet[idx_b]["facet"]
-
-        if topic_a == topic_b and facet_a == facet_b:
-            y_pred[idx] = 1
-
-    f_sim = f1_score(y_true, y_pred, pos_label=1)
-    f_dissim = f1_score(y_true, y_pred, pos_label=0)
-    f_mean = np.mean([f_sim, f_dissim])
-    print("F-Mean: %.4f" % f_mean)
-    print("F-sim: %.4f" % f_sim)
-    print("F-dissim: %.4f" % f_dissim)
+# def eval_t2f_full(t2f_model, project_path):
+#     test_file = os.path.join(project_path, "datasets", "ukp_aspect", "splits",
+#                              "all_data.tsv")
+#     test_data = []
+#     with open(test_file, 'r') as csvfile:
+#         csvreader = csv.reader(csvfile, delimiter='\t', quotechar=None)
+#         for splits in csvreader:
+#             splits = map(str.strip, splits)
+#             __, sentence_a, sentence_b, label = splits
+#             label_bin = 1 if label in ['SS', 'HS'] else 0
+#             test_data.append((sentence_a, sentence_b, label_bin))
+#
+#     y_true = np.zeros(len(test_data))
+#     y_pred = np.zeros(len(test_data))
+#
+#     for idx, row in enumerate(test_data):
+#         sentence_a, sentence_b, label_bin = row
+#         if label_bin == 1:
+#             y_true[idx] = 1
+#
+#         idx_a = np.where(t2f_model.documents == sentence_a)[0][0]
+#         idx_b = np.where(t2f_model.documents == sentence_b)[0][0]
+#
+#         topic_a = t2f_model.doc_topic_facet[idx_a]["topic"]
+#         topic_b = t2f_model.doc_topic_facet[idx_b]["topic"]
+#         facet_a = t2f_model.doc_topic_facet[idx_a]["facet"]
+#         facet_b = t2f_model.doc_topic_facet[idx_b]["facet"]
+#
+#         if topic_a == topic_b and facet_a == facet_b:
+#             y_pred[idx] = 1
+#
+#     f_sim = f1_score(y_true, y_pred, pos_label=1)
+#     f_dissim = f1_score(y_true, y_pred, pos_label=0)
+#     f_mean = np.mean([f_sim, f_dissim])
+#     print("F-Mean: %.4f" % f_mean)
+#     print("F-sim: %.4f" % f_sim)
+#     print("F-dissim: %.4f" % f_dissim)
