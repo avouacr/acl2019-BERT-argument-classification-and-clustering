@@ -1,13 +1,16 @@
 """
 Computes the F1-scores without clustering (Table 2 in the paper).
 """
-import numpy as np
+import os
 import csv
-from sklearn.metrics import f1_score
 from collections import defaultdict
 
+import numpy as np
+from scipy.spatial.distance import cosine
+from sklearn.metrics import f1_score
 
-class PairwisePredictionSimilarityScorer:
+
+class SupervisedSimilarityScorer:
     def __init__(self, predictions_file):
         self.score_lookup = defaultdict(dict)
         for line in open(predictions_file):
@@ -18,19 +21,22 @@ class PairwisePredictionSimilarityScorer:
             self.score_lookup[sentence_a][sentence_b] = score
             self.score_lookup[sentence_b][sentence_a] = score
 
-
     def get_similarity(self, sentence_a, sentence_b):
         return self.score_lookup[sentence_a][sentence_b]
 
 
+class UnsupervisedSimilarityScorer:
+    def __init__(self, t2f_model):
+        self.t2f_model = t2f_model
+        self.doc2idx = {doc: idx for idx, doc in enumerate(t2f_model.documents)}
+
+    def get_similarity(self, sentence_a, sentence_b):
+        vec_a = self.t2f_model.document_vectors[self.doc2idx[sentence_a]]
+        vec_b = self.t2f_model.document_vectors[self.doc2idx[sentence_b]]
+        return 1 - cosine(vec_a, vec_b)
 
 
-######################################
-#
-# Some help functions
-#
-######################################
-def evaluate(similarity_score_function, labels_file, threshold, print_scores=False):
+def eval_split(similarity_score_function, labels_file, threshold):
     all_f1_means = []
     all_f1_sim = []
     all_f1_dissim = []
@@ -41,10 +47,14 @@ def evaluate(similarity_score_function, labels_file, threshold, print_scores=Fal
         for splits in csvreader:
             splits = map(str.strip, splits)
             label_topic, sentence_a, sentence_b, label = splits
+
             label_bin = '1' if label in ['SS', 'HS'] else '0'
 
-            test_data[label_topic].append({'topic': label_topic, 'sentence_a': sentence_a, 'sentence_b': sentence_b, 'label': label,
-                 'label_bin': label_bin})
+            test_data[label_topic].append({'topic': label_topic,
+                                           'sentence_a': sentence_a,
+                                           'sentence_b': sentence_b,
+                                           'label': label,
+                                           'label_bin': label_bin})
 
     for topic in test_data:
         topic_test_data = test_data[topic]
@@ -62,9 +72,6 @@ def evaluate(similarity_score_function, labels_file, threshold, print_scores=Fal
             if similarity_score_function(sentence_a, sentence_b) > threshold:
                 y_pred[idx] = 1
 
-
-
-
         f_sim = f1_score(y_true, y_pred, pos_label=1)
         f_dissim = f1_score(y_true, y_pred, pos_label=0)
         f_mean = np.mean([f_sim, f_dissim])
@@ -72,76 +79,53 @@ def evaluate(similarity_score_function, labels_file, threshold, print_scores=Fal
         all_f1_dissim.append(f_dissim)
         all_f1_means.append(f_mean)
 
-        if print_scores:
-            print("F-Sim: %.2f%%" % (f_sim * 100))
-            print("F-Dissim: %.2f%%" % (f_dissim * 100))
-            print("F-Mean: %.2f%%" % (f_mean * 100))
-            acc = np.sum(y_true==y_pred) / len(y_true)
-            print("Acc: %.2f%%" % (acc * 100))
-
     return np.mean(all_f1_sim), np.mean(all_f1_dissim), np.mean(all_f1_means)
 
 
+def final_eval(method, project_path, t2f_model=None):
 
-######################################
-#
-# Functions for pairwise classification approaches
-#
-######################################
-def trained_pairwise_prediction_clustering(bert_experiment, epoch):
-
-    print("Epoch:", epoch)
+    test_path_tplt = os.path.join(project_path, "datasets", "ukp_aspect", "splits",
+                                  "{split}", "{mode}.tsv")
+    bert_experiment_tplt = os.path.join(project_path, "bert_output", "ukp",
+                                        "seed-1", "splits", "{split}",
+                                        "{mode}_predictions_epoch_3.tsv")
 
     all_f1_sim = []
     all_f1_dissim = []
     all_f1 = []
     for split in [0, 1, 2, 3]:
-        print("\n==================")
-        print("Split:", split)
-        dev_file = './datasets/ukp_aspect/splits/%d/dev.tsv' % (split)
-        test_file = './datasets/ukp_aspect/splits/%d/test.tsv' % (split)
+        dev_file = test_path_tplt.format(split=split, mode="dev")
+        test_file = test_path_tplt.format(split=split, mode="test")
 
-        dev_sim_scorer = PairwisePredictionSimilarityScorer("%s/%d/dev_predictions_epoch_%d.tsv" % (bert_experiment, split, epoch))
-        test_sim_scorer = PairwisePredictionSimilarityScorer("%s/%d/test_predictions_epoch_%d.tsv" % (bert_experiment, split, epoch))
+        if method == "supervised":
+            dev_sim_scorer = SupervisedSimilarityScorer(bert_experiment_tplt.format(split=split,
+                                                                                    mode="dev"))
+            test_sim_scorer = SupervisedSimilarityScorer(bert_experiment_tplt.format(split=split,
+                                                                                     mode="test"))
+        elif method == "unsupervised":
+            dev_sim_scorer = UnsupervisedSimilarityScorer(t2f_model)
+            test_sim_scorer = dev_sim_scorer
 
         best_f1 = 0
         best_threshold = 0
 
         for threshold_int in range(0, 20):
             threshold = threshold_int / 20
-            f1_sim, f1_dissim, f1 = evaluate(dev_sim_scorer.get_similarity, dev_file, threshold)
+            __, __, f1_mean = eval_split(dev_sim_scorer.get_similarity,
+                                         dev_file, threshold)
 
-            if f1 > best_f1:
-                best_f1 = f1
+            if f1_mean > best_f1:
+                best_f1 = f1_mean
                 best_threshold = threshold
 
-        print("Best threshold on dev:", best_threshold, "F1:", best_f1)
-
         # Evaluate on test
-        f1_sim, f1_dissim, f1 = evaluate(test_sim_scorer.get_similarity, test_file, best_threshold)
+        f1_sim, f1_dissim, f1_mean = eval_split(test_sim_scorer.get_similarity,
+                                                test_file, best_threshold)
 
         all_f1_sim.append(f1_sim)
         all_f1_dissim.append(f1_dissim)
-        all_f1.append(f1)
+        all_f1.append(f1_mean)
 
-        print("Test-Performance on this split:")
-        print("F-Mean: %.4f" % (f1))
-        print("F-sim: %.4f" % (f1_sim))
-        print("F-dissim: %.4f" % (f1_dissim))
-
-
-
-    print("\n\n===========  Averaged performance over all splits ==========")
     print("F-Mean: %.4f" % (np.mean(all_f1)))
     print("F-sim: %.4f" % (np.mean(all_f1_sim)))
     print("F-dissim: %.4f" % (np.mean(all_f1_dissim)))
-    return np.mean(all_f1)
-
-
-def main():
-    bert_experiment = 'bert_output/ukp/seed-1/splits/'
-    trained_pairwise_prediction_clustering(bert_experiment, epoch=2)
-
-
-if __name__ == '__main__':
-    main()
