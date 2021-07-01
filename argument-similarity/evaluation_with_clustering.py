@@ -49,7 +49,7 @@ class UnsupervisedSimilarityScorer:
         return dist_mat
 
 
-def get_clustering(distance_function, pre_cluster_gold_topics,
+def get_clustering(distance_function, use_topic_information,
                    testfile, threshold):
     """"""
     unique_sentences = {}
@@ -59,7 +59,7 @@ def get_clustering(distance_function, pre_cluster_gold_topics,
             splits = map(str.strip, splits)
             topic, sentence_a, sentence_b, __ = splits
 
-            if not pre_cluster_gold_topics:
+            if not use_topic_information:
                 topic = 0   # All docs in a single topic
             if topic not in unique_sentences:
                 unique_sentences[topic] = set()
@@ -139,14 +139,14 @@ def eval_split(clusters, labels_file):
     return np.mean(all_f1_sim), np.mean(all_f1_dissim), np.mean(all_f1_means)
 
 
-def best_clustering_split(split, method, t2f_model, pre_cluster_gold_topics,
+def best_clustering_split(split, method, t2f_model, use_topic_information,
                           test_path_tplt, project_path):
     # Evaluation files
     dev_file = test_path_tplt.format(split=split, mode="dev")
     test_file = test_path_tplt.format(split=split, mode="test")
 
     if method == "supervised":
-        if pre_cluster_gold_topics:
+        if use_topic_information:
             # HCL is performed among each (gold) topic label
             bert_experiment_tplt = os.path.join(project_path, "bert_output", "ukp",
                                                 "seed-1", "splits", "{split}",
@@ -170,7 +170,7 @@ def best_clustering_split(split, method, t2f_model, pre_cluster_gold_topics,
     for threshold_int in range(0, 21):
         threshold = threshold_int / 20
         clusters = get_clustering(dev_sim_scorer.get_distance_matrix,
-                                  pre_cluster_gold_topics,
+                                  use_topic_information,
                                   dev_file, threshold)
         __, __, f1_mean = eval_split(clusters, dev_file)
 
@@ -182,13 +182,13 @@ def best_clustering_split(split, method, t2f_model, pre_cluster_gold_topics,
 
     # Compute clusters on test
     clusters = get_clustering(test_sim_scorer.get_distance_matrix,
-                              pre_cluster_gold_topics,
+                              use_topic_information,
                               test_file, best_threshold)
     return clusters
 
 
 def final_eval(method, project_path, t2f_model=None,
-               pre_cluster_gold_topics=True):
+               use_topic_information=True):
     test_path_tplt = os.path.join(project_path, "datasets", "ukp_aspect", "splits",
                                   "{split}", "{mode}.tsv")
 
@@ -200,7 +200,7 @@ def final_eval(method, project_path, t2f_model=None,
         # print("Split:", split)
         test_file = test_path_tplt.format(split=split, mode="test")
         clusters = best_clustering_split(split, method, t2f_model,
-                                         pre_cluster_gold_topics,
+                                         use_topic_information,
                                          test_path_tplt, project_path)
         f1_sim, f1_dissim, f1_mean = eval_split(clusters, test_file)
 
