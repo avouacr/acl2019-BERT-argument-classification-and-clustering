@@ -11,12 +11,37 @@ import os
 from collections import defaultdict
 
 import numpy as np
+from sklearn.feature_extraction.text import TfidfVectorizer
 from sklearn.metrics.pairwise import cosine_similarity
 from sklearn.metrics import f1_score
 from sklearn.cluster import AgglomerativeClustering
 
 
-class SupervisedSimilarityScorer:
+class TFIDFDistanceScorer:
+    def __init__(self, train_file):
+        self.tf_idf_model = self.train_tf_idf(train_file)
+
+    def train_tf_idf(self, train_file):
+        train_set = set()
+        with open(train_file, "r") as file:
+            for line in file:
+                splits = line.strip().split('\t')
+                sentence_a = splits[0].strip()
+                sentence_b = splits[1].strip()
+                train_set.add(sentence_a)
+                train_set.add(sentence_b)
+
+        tf_idf_vectorizer = TfidfVectorizer(stop_words="english")
+        tf_idf_vectorizer.fit(train_set)
+        return tf_idf_vectorizer
+
+    def get_distance_matrix(self, documents):
+        tf_idf_mat = self.tf_idf_model.transform(documents)
+        dist_mat = 1 - cosine_similarity(tf_idf_mat)
+        return dist_mat
+
+
+class SupervisedDistanceScorer:
     def __init__(self, predictions_file):
         self.score_lookup = defaultdict(dict)
         for line in open(predictions_file):
@@ -38,7 +63,7 @@ class SupervisedSimilarityScorer:
         return dist_mat
 
 
-class UnsupervisedSimilarityScorer:
+class T2FDistanceScorer:
     def __init__(self, t2f_model):
         self.t2f_model = t2f_model
         self.doc2idx = {doc: idx for idx, doc in enumerate(t2f_model.documents)}
@@ -150,27 +175,29 @@ def eval_split(clusters, labels_file):
 def best_clustering_split(split, method, topics, t2f_model,
                           test_path_tplt, project_path):
     # Evaluation files
+    train_file = test_path_tplt.format(split=split, mode="train")
     dev_file = test_path_tplt.format(split=split, mode="dev")
     test_file = test_path_tplt.format(split=split, mode="test")
 
     if method == "supervised":
-        if topics == "gold":
-            # HCL is performed among each (gold) topic label
-            bert_experiment_tplt = os.path.join(project_path, "bert_output", "ukp",
-                                                "seed-1", "splits", "{split}",
-                                                "{mode}_predictions_epoch_3.tsv")
-        elif topics == "none":
-            # HCL is performed on the whole data split without topic information
-            bert_experiment_tplt = os.path.join(project_path, "bert_output", "ukp",
-                                                "seed-1", "splits", "{split}",
-                                                "{mode}_predictions_epoch_3_no_topic_info.tsv")
-        dev_sim_scorer = SupervisedSimilarityScorer(bert_experiment_tplt.format(split=split,
-                                                                                mode="dev"))
-        test_sim_scorer = SupervisedSimilarityScorer(bert_experiment_tplt.format(split=split,
-                                                                                 mode="test"))
-    elif method == "unsupervised":
-        dev_sim_scorer = UnsupervisedSimilarityScorer(t2f_model)
+        bert_experiment_tplt = os.path.join(project_path, "bert_output", "ukp",
+                                            "seed-1", "splits", "{split}",
+                                            "{mode}_predictions_epoch_3_all_sentences.tsv")
+        dev_sim_scorer = SupervisedDistanceScorer(bert_experiment_tplt.format(split=split,
+                                                                              mode="dev"))
+        test_sim_scorer = SupervisedDistanceScorer(bert_experiment_tplt.format(split=split,
+                                                                               mode="test"))
+    elif method == "t2f":
+        dev_sim_scorer = T2FDistanceScorer(t2f_model)
         test_sim_scorer = dev_sim_scorer
+    elif method == "tf_idf":
+        dev_sim_scorer = TFIDFDistanceScorer(train_file)
+        test_sim_scorer = dev_sim_scorer
+    elif method in ["is_fasttext", "is_glove", "glove_avg", "elmo_avg", "bert_avg"]:
+        dev_sim_scorer = UnsupervisedDistanceScorer(method, dev_file)
+        test_sim_scorer = UnsupervisedDistanceScorer(method, test_file)
+    else:
+        raise ValueError("Invalid method provided.")
 
     best_f1 = 0
     best_threshold = 0
