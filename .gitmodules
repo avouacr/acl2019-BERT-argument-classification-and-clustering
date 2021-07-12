@@ -1,0 +1,3 @@
+[submodule "argument-similarity/InferSent"]
+	path = argument-similarity/InferSent
+	url = git@github.com:facebookresearch/InferSent.git

@@ -11,71 +11,12 @@ import os
 from collections import defaultdict
 
 import numpy as np
-from sklearn.feature_extraction.text import TfidfVectorizer
-from sklearn.metrics.pairwise import cosine_similarity
 from sklearn.metrics import f1_score
 from sklearn.cluster import AgglomerativeClustering
 
-
-class TFIDFDistanceScorer:
-    def __init__(self, train_file):
-        self.tf_idf_model = self.train_tf_idf(train_file)
-
-    def train_tf_idf(self, train_file):
-        train_set = set()
-        with open(train_file, "r") as file:
-            for line in file:
-                splits = line.strip().split('\t')
-                sentence_a = splits[0].strip()
-                sentence_b = splits[1].strip()
-                train_set.add(sentence_a)
-                train_set.add(sentence_b)
-
-        tf_idf_vectorizer = TfidfVectorizer(stop_words="english")
-        tf_idf_vectorizer.fit(train_set)
-        return tf_idf_vectorizer
-
-    def get_distance_matrix(self, documents):
-        tf_idf_mat = self.tf_idf_model.transform(documents)
-        dist_mat = 1 - cosine_similarity(tf_idf_mat)
-        return dist_mat
-
-
-class SupervisedDistanceScorer:
-    def __init__(self, predictions_file):
-        self.score_lookup = defaultdict(dict)
-        for line in open(predictions_file):
-            splits = line.strip().split('\t')
-            score = float(splits[-1])
-            sentence_a = splits[0].strip()
-            sentence_b = splits[1].strip()
-            self.score_lookup[sentence_a][sentence_b] = score
-            self.score_lookup[sentence_b][sentence_a] = score
-
-    def get_distance_matrix(self, documents):
-        dist_mat = np.zeros((len(documents), len(documents)))
-        for idx_a, sentence_a in enumerate(documents):
-            for idx_b, sentence_b in enumerate(documents):
-                if sentence_a == sentence_b:
-                    dist_mat[idx_a, idx_b] = 0
-                else:
-                    dist_mat[idx_a, idx_b] = 1 - self.score_lookup[sentence_a][sentence_b]
-        return dist_mat
-
-
-class T2FDistanceScorer:
-    def __init__(self, t2f_model):
-        self.t2f_model = t2f_model
-        self.doc2idx = {doc: idx for idx, doc in enumerate(t2f_model.documents)}
-
-    def get_distance_matrix(self, documents):
-        doc_idxs = [self.doc2idx[doc] for doc in documents]
-        dist_mat = 1 - cosine_similarity(self.t2f_model.document_vectors[doc_idxs])
-        return dist_mat
-
-    def get_doc_topic(self, doc):
-        idx = self.doc2idx[doc]
-        return self.t2f_model.doc_topic_facet[idx]["topic"]
+from scorers import (TFIDFDistanceScorer, InferSentDistanceScorer,
+                     SupervisedDistanceScorer,
+                     T2FDistanceScorer)
 
 
 def get_clustering(scorer, topics,
@@ -193,7 +134,10 @@ def best_clustering_split(split, method, topics, t2f_model,
     elif method == "tf_idf":
         dev_sim_scorer = TFIDFDistanceScorer(train_file)
         test_sim_scorer = dev_sim_scorer
-    elif method in ["is_fasttext", "is_glove", "glove_avg", "elmo_avg", "bert_avg"]:
+    elif method in ["is_fasttext", "is_glove"]:
+        dev_sim_scorer = InferSentDistanceScorer(method, project_path)
+        test_sim_scorer = dev_sim_scorer
+    elif method in ["glove_avg", "elmo_avg", "bert_avg"]:
         dev_sim_scorer = UnsupervisedDistanceScorer(method, dev_file)
         test_sim_scorer = UnsupervisedDistanceScorer(method, test_file)
     else:
