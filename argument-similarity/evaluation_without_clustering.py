@@ -9,11 +9,11 @@ import numpy as np
 from sklearn.metrics import f1_score
 
 from scorers import (TFIDFDistanceScorer, InferSentDistanceScorer,
-                     SupervisedDistanceScorer,
-                     T2FDistanceScorer)
+                     AvgGloVeEmbeddingsDistanceScorer, AvgBERTEmbeddingsDistanceScorer,
+                     SupervisedDistanceScorer, T2FDistanceScorer)
 
 
-def eval_split(similarity_score_function, labels_file, threshold):
+def eval_split(distance_score_function, labels_file, threshold):
     all_f1_means = []
     all_f1_sim = []
     all_f1_dissim = []
@@ -46,7 +46,7 @@ def eval_split(similarity_score_function, labels_file, threshold):
             if label == '1':
                 y_true[idx] = 1
 
-            if similarity_score_function(sentence_a, sentence_b) > threshold:
+            if 1 - distance_score_function(sentence_a, sentence_b) > threshold:
                 y_pred[idx] = 1
 
         f_sim = f1_score(y_true, y_pred, pos_label=1)
@@ -81,14 +81,20 @@ def final_eval(method, project_path, t2f_model=None):
             test_sim_scorer = SupervisedDistanceScorer(bert_experiment_tplt.format(split=split,
                                                                                    mode="test"))
         elif method == "t2f":
-            dev_sim_scorer = UnsupervisedDistanceScorer(t2f_model)
+            dev_sim_scorer = T2FDistanceScorer(t2f_model)
             test_sim_scorer = dev_sim_scorer
         elif method == "tf_idf":
             dev_sim_scorer = TFIDFDistanceScorer(train_file)
             test_sim_scorer = dev_sim_scorer
-        elif method in ["is_fasttext", "is_glove", "glove_avg", "elmo_avg", "bert_avg"]:
-            dev_sim_scorer = UnsupervisedDistanceScorer(method, dev_file)
-            test_sim_scorer = UnsupervisedDistanceScorer(method, test_file)
+        elif method in ["is_fasttext", "is_glove"]:
+            dev_sim_scorer = InferSentDistanceScorer(method, project_path)
+            test_sim_scorer = dev_sim_scorer
+        elif method == "glove_avg":
+            dev_sim_scorer = AvgGloVeEmbeddingsDistanceScorer()
+            test_sim_scorer = dev_sim_scorer
+        elif method == "bert_avg":
+            dev_sim_scorer = AvgBERTEmbeddingsDistanceScorer()
+            test_sim_scorer = dev_sim_scorer
         else:
             raise ValueError("Invalid method provided.")
 
@@ -97,7 +103,7 @@ def final_eval(method, project_path, t2f_model=None):
 
         for threshold_int in range(0, 20):
             threshold = threshold_int / 20
-            __, __, f1_mean = eval_split(dev_sim_scorer.get_similarity,
+            __, __, f1_mean = eval_split(dev_sim_scorer.get_pairwise_distance,
                                          dev_file, threshold)
 
             if f1_mean > best_f1:
@@ -105,7 +111,7 @@ def final_eval(method, project_path, t2f_model=None):
                 best_threshold = threshold
 
         # Evaluate on test
-        f1_sim, f1_dissim, f1_mean = eval_split(test_sim_scorer.get_similarity,
+        f1_sim, f1_dissim, f1_mean = eval_split(test_sim_scorer.get_pairwise_distance,
                                                 test_file, best_threshold)
 
         all_f1_sim.append(f1_sim)

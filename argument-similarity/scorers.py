@@ -1,12 +1,16 @@
 """"""
-from collections import defaultdict
 import os
+from collections import defaultdict
 
 import numpy as np
 from sklearn.feature_extraction.text import TfidfVectorizer
 from sklearn.metrics.pairwise import cosine_similarity
 from scipy.spatial.distance import cosine
 import torch
+from torch.utils.data import DataLoader
+from transformers import AutoTokenizer, AutoModel
+from tqdm import tqdm
+from sentence_transformers import SentenceTransformer
 
 from InferSent.models import InferSent
 
@@ -51,7 +55,7 @@ class InferSentDistanceScorer:
         if method == "is_glove":
             version = 1
             w2v_path = project_path + '/InferSent/fastText/crawl-300d-2M.vec'
-        if method == "is_fasttext":
+        elif method == "is_fasttext":
             version = 2
             w2v_path = project_path + '/InferSent/GloVe/glove.840B.300d.txt'
         model_path = project_path + f'/InferSent/encoder/infersent{version}.pkl'
@@ -65,6 +69,80 @@ class InferSentDistanceScorer:
     def get_distance_matrix(self, documents):
         self.model.build_vocab(documents, tokenize=True)
         embeddings = self.model.encode(documents, tokenize=True)
+        dist_mat = 1 - cosine_similarity(embeddings)
+        return dist_mat
+
+
+class AvgGloVeEmbeddingsDistanceScorer:
+    def __init__(self):
+        self.model = self.initialize_model()
+
+    @staticmethod
+    def initialize_model():
+        url = "average_word_embeddings_glove.6B.300d"
+        model = SentenceTransformer(url)
+        return model
+
+    def get_distance_matrix(self, documents):
+        embeddings = self.model.encode(documents)
+        dist_mat = 1 - cosine_similarity(embeddings)
+        return dist_mat
+
+
+class AvgBERTEmbeddingsDistanceScorer:
+    def __init__(self, ):
+        self.tokenizer, self.model = self.initialize_model()
+
+    @staticmethod
+    def initialize_model():
+        url = "bert-base-uncased"
+        tokenizer = AutoTokenizer.from_pretrained(url)
+        model = AutoModel.from_pretrained(url)
+        return tokenizer, model
+
+    def embed_corpus(self, documents, device=None, batch_size=32):
+        """Compute document embeddings using a transfomer model."""
+        if device is None:
+            device = "cuda" if torch.cuda.is_available() else "cpu"
+
+        # Load embedding model
+        self.model.to(device)
+
+        # Load corpus in a Torch dataloader
+        dataset = list(documents)
+        dataloader = DataLoader(dataset, batch_size)
+
+        # Embed corpus by batches
+        batches_embedding = []
+        for __, batch in tqdm(enumerate(dataloader)):
+            # Tokenize documents
+            encoded_input = self.tokenizer(batch, padding=True, truncation=True,
+                                           return_tensors='pt')
+            encoded_input = encoded_input.to(device)
+            # Compute token embeddings
+            with torch.no_grad():
+                model_output = self.model(**encoded_input)
+
+            # Perform pooling to get document embeddings
+            token_embeddings = model_output[0]
+            input_mask_expanded = (encoded_input['attention_mask'].unsqueeze(-1)
+                                   .expand(token_embeddings.size()).float())
+            token_embeddings = token_embeddings.cpu().detach().numpy()
+            input_mask_expanded = input_mask_expanded.cpu().detach().numpy()
+            # Take attention mask into account for correct averaging
+            sum_embeddings = np.sum(token_embeddings * input_mask_expanded,
+                                    axis=1)
+            sum_mask = np.clip(input_mask_expanded.sum(axis=1), a_min=1e-9,
+                               a_max=None)
+            batch_emb = sum_embeddings / sum_mask
+            batches_embedding.append(batch_emb)
+
+        document_vectors = np.vstack(batches_embedding)
+        dist_mat = 1 - cosine_similarity(document_vectors)
+        return dist_mat
+
+    def get_distance_matrix(self, documents):
+        embeddings = self.embed_corpus(documents)
         dist_mat = 1 - cosine_similarity(embeddings)
         return dist_mat
 

@@ -15,8 +15,8 @@ from sklearn.metrics import f1_score
 from sklearn.cluster import AgglomerativeClustering
 
 from scorers import (TFIDFDistanceScorer, InferSentDistanceScorer,
-                     SupervisedDistanceScorer,
-                     T2FDistanceScorer)
+                     AvgGloVeEmbeddingsDistanceScorer, AvgBERTEmbeddingsDistanceScorer,
+                     SupervisedDistanceScorer, T2FDistanceScorer)
 
 
 def get_clustering(scorer, topics,
@@ -53,6 +53,7 @@ def get_clustering(scorer, topics,
             continue
 
         dist_mat = scorer.get_distance_matrix(topic_sentences)
+        print(dist_mat.shape)
 
         clustering = agg_cls.fit(dist_mat)
         for cluster in clustering.labels_:
@@ -123,7 +124,7 @@ def best_clustering_split(split, method, topics, t2f_model,
     if method == "supervised":
         bert_experiment_tplt = os.path.join(project_path, "bert_output", "ukp",
                                             "seed-1", "splits", "{split}",
-                                            "{mode}_predictions_epoch_3_all_sentences.tsv")
+                                            "{mode}_predictions_epoch_3_all_pairs.tsv")
         dev_sim_scorer = SupervisedDistanceScorer(bert_experiment_tplt.format(split=split,
                                                                               mode="dev"))
         test_sim_scorer = SupervisedDistanceScorer(bert_experiment_tplt.format(split=split,
@@ -137,9 +138,12 @@ def best_clustering_split(split, method, topics, t2f_model,
     elif method in ["is_fasttext", "is_glove"]:
         dev_sim_scorer = InferSentDistanceScorer(method, project_path)
         test_sim_scorer = dev_sim_scorer
-    elif method in ["glove_avg", "elmo_avg", "bert_avg"]:
-        dev_sim_scorer = UnsupervisedDistanceScorer(method, dev_file)
-        test_sim_scorer = UnsupervisedDistanceScorer(method, test_file)
+    elif method == "glove_avg":
+        dev_sim_scorer = AvgGloVeEmbeddingsDistanceScorer()
+        test_sim_scorer = dev_sim_scorer
+    elif method == "bert_avg":
+        dev_sim_scorer = AvgBERTEmbeddingsDistanceScorer()
+        test_sim_scorer = dev_sim_scorer
     else:
         raise ValueError("Invalid method provided.")
 
